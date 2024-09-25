@@ -4,10 +4,12 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define SOCKET_PATH "/tmp/unix_socket"
+#define BUFFER_SIZE 1024
 
-// Function to parse arguments (socket path)
+// Function to parse arguments just the socket path in the servers case.
 void parse_arguments(int argc, char *argv[], char **socket_path) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <socket_path>\n", argv[0]);
@@ -16,7 +18,7 @@ void parse_arguments(int argc, char *argv[], char **socket_path) {
     *socket_path = argv[1];
 }
 
-// Function to create and bind socket
+// Function to create and bind socket so that clients can connect.
 int create_and_bind_socket(const char *socket_path) {
     int sock;
     struct sockaddr_un addr;
@@ -31,7 +33,7 @@ int create_and_bind_socket(const char *socket_path) {
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
-    // Bind socket to the specified path
+    // Bind socket to the specified path allowing connection between client and server.
     unlink(socket_path);
     if (bind(sock, (struct sockaddr *) &addr, sizeof(struct sockaddr_un)) == -1) {
         perror("bind");
@@ -42,13 +44,15 @@ int create_and_bind_socket(const char *socket_path) {
     return sock;
 }
 
-// Function to listen for and accept client connections
+// Listening and accepting incoming requests.
 void accept_connections(int sock) {
     if (listen(sock, 5) == -1) {
         perror("listen");
         close(sock);
         exit(EXIT_FAILURE);
     }
+
+    printf("Server listening on socket path...\n");
 
     while (1) {
         int client_sock;
@@ -59,26 +63,43 @@ void accept_connections(int sock) {
             perror("accept");
             continue;
         }
+        printf("Accepted client connection.\n");
 
         // Receive file path from client
         memset(buffer, 0, sizeof(buffer));
-        if (recv(client_sock, buffer, sizeof(buffer), 0) == -1) {
+        ssize_t bytes_received = recv(client_sock, buffer, sizeof(buffer), 0);
+        if (bytes_received == -1) {
             perror("recv");
+            close(client_sock);
+            continue;
+        } else if (bytes_received == 0) {
+            printf("Client closed the connection.\n");
             close(client_sock);
             continue;
         }
 
-        // Open the file and send its content back to the client
+        printf("Received file path from client: %s\n", buffer);
+
+        // Check if the file exists and is readable
         FILE *file = fopen(buffer, "r");
         if (file == NULL) {
+            if (errno == ENOENT) {
+                const char *error_msg = "Error: File does not exist\n";
+                send(client_sock, error_msg, strlen(error_msg), 0);
+            } else if (errno == EACCES) {
+                const char *error_msg = "Error: Permission denied\n";
+                send(client_sock, error_msg, strlen(error_msg), 0);
+            } else {
+                const char *error_msg = "Error: Unable to read file\n";
+                send(client_sock, error_msg, strlen(error_msg), 0);
+            }
             perror("fopen");
-            const char *error_msg = "Error: Unable to read file\n";
-            send(client_sock, error_msg, strlen(error_msg), 0);
         } else {
-            char file_content[1024];
+            char file_content[BUFFER_SIZE];
             size_t n;
 
             // Read file and send it back to the client
+            printf("Sending file content to client...\n");
             while ((n = fread(file_content, 1, sizeof(file_content), file)) > 0) {
                 if (send(client_sock, file_content, n, 0) == -1) {
                     perror("send");
@@ -86,9 +107,11 @@ void accept_connections(int sock) {
                 }
             }
             fclose(file);
+            printf("File content sent to client.\n");
         }
 
         close(client_sock);  // Close client connection
+        printf("Closed client connection.\n");
     }
 }
 
@@ -110,4 +133,3 @@ int main(int argc, char *argv[]) {
     unlink(socket_path);
     return EXIT_SUCCESS;
 }
-

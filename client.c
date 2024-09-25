@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define BUFFER_SIZE 1024
 
@@ -15,6 +16,12 @@ void parse_arguments(int argc, char *argv[], char **socket_path, char **file_pat
     }
     *socket_path = argv[1];
     *file_path = argv[2];
+
+    // Check if file path is valid
+    if (access(*file_path, F_OK) == -1) {
+        fprintf(stderr, "Error: File '%s' does not exist.\n", *file_path);
+        exit(EXIT_FAILURE);
+    }
 }
 
 // Function to create and connect the client socket
@@ -61,6 +68,7 @@ void send_file_path_and_receive_response(int sock, const char *file_path) {
             close(sock);
             exit(EXIT_FAILURE);
         } else if (n == 0) {
+            printf("\nServer closed connection.\n");
             break;  // Server closed connection
         }
         fwrite(buffer, 1, n, stdout);  // Print the received content
